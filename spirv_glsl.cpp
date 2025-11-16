@@ -11130,7 +11130,10 @@ string CompilerGLSL::access_chain(uint32_t base, const uint32_t *indices, uint32
 		}
 
 		auto basename = to_flattened_access_chain_expression(base);
-		auto ret = join(basename, "_", chain);
+		//SH change begin
+		//auto ret = join(basename, "_", chain);
+		auto ret = chain;
+		//SH change end
 		ParsedIR::sanitize_underscores(ret);
 		return ret;
 	}
