@@ -37,6 +37,7 @@
 #endif
 #include <locale.h>
 
+#include <typeinfo>
 using namespace SPIRV_CROSS_SPV_HEADER_NAMESPACE;
 using namespace SPIRV_CROSS_NAMESPACE;
 using namespace std;
@@ -2602,7 +2603,16 @@ void CompilerGLSL::emit_buffer_block_native(const SPIRVariable &var)
 	// It will need to be reset if we have to recompile.
 	preserve_alias_on_reset(var.self);
 	add_resource_name(var.self);
-	end_scope_decl(to_name(var.self) + type_to_array_glsl(type, var.self));
+
+	//SH Change begin
+	// If the block variable OpName string is empty in SPIR-V, omit the instance name entirely:
+	// layout(...) uniform/buffer Block { ... };
+	// In this mode, member accesses are also emitted without a base instance name.
+	if (get_name(var.self).empty())
+		end_scope_decl();
+	else
+		end_scope_decl(to_name(var.self) + type_to_array_glsl(type, var.self));
+	//SH Change end
 	statement("");
 }
 
@@ -10489,6 +10499,13 @@ bool CompilerGLSL::access_chain_needs_stage_io_builtin_translation(uint32_t)
 	return true;
 }
 
+static bool spvc_is_pure_glsl_backend(const CompilerGLSL *self)
+{
+	// CompilerHLSL / CompilerMSL etc inherit from CompilerGLSL.
+	// We only want this behavior when the concrete type is exactly CompilerGLSL.
+	return typeid(*self) == typeid(CompilerGLSL);
+}
+
 string CompilerGLSL::access_chain_internal(uint32_t base, const uint32_t *indices, uint32_t count,
                                            AccessChainFlags flags, AccessChainMeta *meta)
 {
@@ -10511,6 +10528,23 @@ string CompilerGLSL::access_chain_internal(uint32_t base, const uint32_t *indice
 		expr = to_enclosed_expression(base, register_expression_read);
 		if (e)
 			e->need_transpose = old_transpose;
+
+		//SH Change begin
+		// If the block variable OpName string is empty in SPIR-V and was emitted without an instance name,
+		// strip the base expression so member access starts from the first member name directly (global namespace).
+		if (spvc_is_pure_glsl_backend(this) && get_name(base).empty())
+		{
+			if (auto *var = maybe_get<SPIRVariable>(base))
+			{
+				auto &var_type = get<SPIRType>(var->basetype);
+				auto &expr_type = expression_type(base);
+				if ((has_decoration(var_type.self, DecorationBlock) ||
+				     has_decoration(var_type.self, DecorationBufferBlock)) &&
+				    expr_type.array.empty())
+					expr.clear();
+			}
+		}
+		//SH Change end
 	}
 
 	// Start traversing type hierarchy at the proper non-pointer types,
@@ -16086,8 +16120,25 @@ string CompilerGLSL::to_member_name(const SPIRType &type, uint32_t index)
 		return join("_m", index);
 }
 
-string CompilerGLSL::to_member_reference(uint32_t, const SPIRType &type, uint32_t index, bool)
+string CompilerGLSL::to_member_reference(uint32_t base, const SPIRType &type, uint32_t index, bool in_ptr_chain_or_not_first)
 {
+	//SH Change begin
+	// When emitting unnamed block instances (OpName string empty), the first member access should not be prefixed with ".".
+	// access_chain_internal() will strip the base expression, so we need "member" rather than ".member".
+	if (!in_ptr_chain_or_not_first && spvc_is_pure_glsl_backend(this) && get_name(base).empty())
+	{
+		if (auto *var = maybe_get<SPIRVariable>(base))
+		{
+			auto &var_type = get<SPIRType>(var->basetype);
+			auto &expr_type = expression_type(base);
+			if ((has_decoration(var_type.self, DecorationBlock) ||
+			     has_decoration(var_type.self, DecorationBufferBlock)) &&
+			    expr_type.array.empty())
+				return to_member_name(type, index);
+		}
+	}
+	//SH Change begin
+
 	return join(".", to_member_name(type, index));
 }
 
