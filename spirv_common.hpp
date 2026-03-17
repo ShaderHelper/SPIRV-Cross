@@ -996,6 +996,8 @@ struct SPIRFunction : IVariant
 	{
 	}
 
+	uint32_t function_control = 0;
+
 	struct Parameter
 	{
 		TypeID type;

@@ -3055,6 +3055,11 @@ void CompilerHLSL::emit_function_prototype(SPIRFunction &func, const Bitset &ret
 	if (func.self != ir.default_entry_point)
 		add_function_overload(func);
 
+	// Emit [noinline] if the function has DontInline function control.
+	if (func.self != ir.default_entry_point &&
+	    (func.function_control & spv::FunctionControlDontInlineMask))
+		statement("[noinline]");
+
 	// Avoid shadow declarations.
 	local_variable_names = resource_names;
 
