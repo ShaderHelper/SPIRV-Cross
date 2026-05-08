@@ -562,17 +562,16 @@ const char *CompilerHLSL::to_storage_qualifiers_glsl(const SPIRVariable &var)
 	return "";
 }
 
-void CompilerHLSL::emit_builtin_outputs_in_struct()
+bool CompilerHLSL::emit_builtin_output_in_struct(BuiltIn builtin)
 {
 	auto &execution = get_entry_point();
 
 	bool legacy = hlsl_options.shader_model <= 30;
-	active_output_builtins.for_each_bit([&](uint32_t i) {
-		const char *type = nullptr;
-		const char *semantic = nullptr;
-		auto builtin = static_cast<BuiltIn>(i);
-		switch (builtin)
-		{
+	const char *type = nullptr;
+	const char *semantic = nullptr;
+	bool emitted = false;
+	switch (builtin)
+	{
 		case BuiltInPosition:
 			type = is_position_invariant() && backend.support_precise_qualifier ? "precise float4" : "float4";
 			semantic = legacy ? "POSITION" : "SV_Position";
@@ -616,11 +615,13 @@ void CompilerHLSL::emit_builtin_outputs_in_struct()
 				{
 					// Avoids having to hack up access_chain code. Makes it trivially indexable.
 					statement("float gl_ClipDistance[1] : SV_ClipDistance;");
+					emitted = true;
 				}
 				else
 				{
 					// Replace array with vector directly, avoids any weird fixup path.
 					statement(types[clip_distance_count - 1], " gl_ClipDistance : SV_ClipDistance;");
+					emitted = true;
 				}
 			}
 			else
@@ -635,6 +636,7 @@ void CompilerHLSL::emit_builtin_outputs_in_struct()
 
 					statement(types[to_declare - 1], " ", builtin_to_glsl(builtin, StorageClassOutput), semantic_index,
 					          " : SV_ClipDistance", semantic_index, ";");
+					emitted = true;
 				}
 			}
 			break;
@@ -654,11 +656,13 @@ void CompilerHLSL::emit_builtin_outputs_in_struct()
 				{
 					// Avoids having to hack up access_chain code. Makes it trivially indexable.
 					statement("float gl_CullDistance[1] : SV_CullDistance;");
+					emitted = true;
 				}
 				else
 				{
 					// Replace array with vector directly, avoids any weird fixup path.
 					statement(types[cull_distance_count - 1], " gl_CullDistance : SV_CullDistance;");
+					emitted = true;
 				}
 			}
 			else
@@ -673,6 +677,7 @@ void CompilerHLSL::emit_builtin_outputs_in_struct()
 
 					statement(types[to_declare - 1], " ", builtin_to_glsl(builtin, StorageClassOutput), semantic_index,
 					          " : SV_CullDistance", semantic_index, ";");
+					emitted = true;
 				}
 			}
 			break;
@@ -709,19 +714,21 @@ void CompilerHLSL::emit_builtin_outputs_in_struct()
 			SPIRV_CROSS_THROW("Unsupported builtin in HLSL.");
 		}
 
-		if (type && semantic)
-			statement(type, " ", builtin_to_glsl(builtin, StorageClassOutput), " : ", semantic, ";");
-	    });
+	if (type && semantic)
+	{
+		statement(type, " ", builtin_to_glsl(builtin, StorageClassOutput), " : ", semantic, ";");
+		emitted = true;
+	}
+
+	return emitted;
 }
 
-void CompilerHLSL::emit_builtin_primitive_outputs_in_struct()
+bool CompilerHLSL::emit_builtin_primitive_output_in_struct(BuiltIn builtin)
 {
-	active_output_builtins.for_each_bit([&](uint32_t i) {
-		const char *type = nullptr;
-		const char *semantic = nullptr;
-		auto builtin = static_cast<BuiltIn>(i);
-		switch (builtin)
-		{
+	const char *type = nullptr;
+	const char *semantic = nullptr;
+	switch (builtin)
+	{
 		case BuiltInLayer:
 		{
 			if (hlsl_options.shader_model < 50)
@@ -755,20 +762,22 @@ void CompilerHLSL::emit_builtin_primitive_outputs_in_struct()
 			break;
 		}
 
-		if (type && semantic)
-			statement(type, " ", builtin_to_glsl(builtin, StorageClassOutput), " : ", semantic, ";");
-	});
+	if (type && semantic)
+	{
+		statement(type, " ", builtin_to_glsl(builtin, StorageClassOutput), " : ", semantic, ";");
+		return true;
+	}
+
+	return false;
 }
 
-void CompilerHLSL::emit_builtin_inputs_in_struct()
+void CompilerHLSL::emit_builtin_input_in_struct(BuiltIn builtin)
 {
 	bool legacy = hlsl_options.shader_model <= 30;
-	active_input_builtins.for_each_bit([&](uint32_t i) {
-		const char *type = nullptr;
-		const char *semantic = nullptr;
-		auto builtin = static_cast<BuiltIn>(i);
-		switch (builtin)
-		{
+	const char *type = nullptr;
+	const char *semantic = nullptr;
+	switch (builtin)
+	{
 		case BuiltInFragCoord:
 			type = "float4";
 			semantic = legacy ? "VPOS" : "SV_Position";
@@ -932,11 +941,10 @@ void CompilerHLSL::emit_builtin_inputs_in_struct()
 
 		default:
 			SPIRV_CROSS_THROW("Unsupported builtin in HLSL.");
-		}
+	}
 
-		if (type && semantic)
-			statement(type, " ", builtin_to_glsl(builtin, StorageClassInput), " : ", semantic, ";");
-	});
+	if (type && semantic)
+		statement(type, " ", builtin_to_glsl(builtin, StorageClassInput), " : ", semantic, ";");
 }
 
 uint32_t CompilerHLSL::type_to_consumed_locations(const SPIRType &type) const
@@ -1819,15 +1827,57 @@ void CompilerHLSL::emit_resources()
 		statement("struct SPIRV_Cross_Input");
 
 		begin_scope();
-		sort(input_variables.begin(), input_variables.end(), variable_compare);
-		for (auto &var : input_variables)
-		{
+		const auto emit_input_variable = [&](const IOVariable &var) {
 			if (var.block)
 				emit_interface_block_member_in_struct(*var.var, var.block_member_index, var.location, active_inputs);
 			else
 				emit_interface_block_in_struct(*var.var, active_inputs);
+		};
+
+		if (ir.source.hlsl)
+		{
+			const auto emit_input_variables_for_id = [&](uint32_t var_id) -> bool {
+				bool emitted_variable = false;
+				for (auto &input_var : input_variables)
+				{
+					if (input_var.var->self == var_id)
+					{
+						emit_input_variable(input_var);
+						emitted_variable = true;
+					}
+				}
+				return emitted_variable;
+			};
+
+			for (auto var_id : execution.interface_variables)
+			{
+				auto *var = maybe_get<SPIRVariable>(var_id);
+				if (!var || var->storage != StorageClassInput)
+					continue;
+
+				if (emit_input_variables_for_id(var_id))
+					continue;
+
+				if (is_builtin_variable(*var))
+				{
+					if (has_decoration(var->self, DecorationBuiltIn))
+					{
+						auto builtin = static_cast<BuiltIn>(get_decoration(var->self, DecorationBuiltIn));
+						if (active_input_builtins.get(builtin))
+							emit_builtin_input_in_struct(builtin);
+					}
+				}
+			}
 		}
-		emit_builtin_inputs_in_struct();
+		else
+		{
+			sort(input_variables.begin(), input_variables.end(), variable_compare);
+			for (auto &var : input_variables)
+				emit_input_variable(var);
+			active_input_builtins.for_each_bit([&](uint32_t i) {
+				emit_builtin_input_in_struct(static_cast<BuiltIn>(i));
+			});
+		}
 		end_scope_decl();
 		statement("");
 	}
@@ -1835,25 +1885,88 @@ void CompilerHLSL::emit_resources()
 	const bool is_mesh_shader = execution.model == ExecutionModelMeshEXT;
 	if (!output_variables.empty() || !active_output_builtins.empty())
 	{
-		sort(output_variables.begin(), output_variables.end(), variable_compare);
 		require_output = !(is_mesh_shader || execution.model == ExecutionModelGeometry);
 
-		statement(is_mesh_shader ? "struct gl_MeshPerVertexEXT" : "struct SPIRV_Cross_Output");
-		begin_scope();
-		for (auto &var : output_variables)
-		{
+		const auto emit_output_variable = [&](const IOVariable &var, bool per_primitive) {
+			if (per_primitive)
+			{
+				if (!is_per_primitive_variable(*var.var))
+					return;
+				if (var.block && var.block_member_index != 0)
+					return;
+
+				emit_interface_block_in_struct(*var.var, active_outputs);
+				return;
+			}
+
 			if (is_per_primitive_variable(*var.var))
-				continue;
+				return;
 			if (var.block && is_mesh_shader && var.block_member_index != 0)
-				continue;
+				return;
 			if (var.block && !is_mesh_shader)
 				emit_interface_block_member_in_struct(*var.var, var.block_member_index, var.location, active_outputs);
 			else
 				emit_interface_block_in_struct(*var.var, active_outputs);
+		};
+		const auto emit_output_variables_for_id = [&](uint32_t var_id, bool per_primitive) -> bool {
+			bool handled_variable = false;
+			for (auto &output_var : output_variables)
+			{
+				if (output_var.var->self == var_id)
+				{
+					emit_output_variable(output_var, per_primitive);
+					handled_variable = true;
+				}
+			}
+			return handled_variable;
+		};
+
+		const auto emit_output_builtin = [&](BuiltIn builtin, bool regular, bool primitive) {
+			if (!active_output_builtins.get(builtin))
+				return;
+			if (regular)
+				emit_builtin_output_in_struct(builtin);
+			if (primitive)
+				emit_builtin_primitive_output_in_struct(builtin);
+		};
+
+		const auto emit_output_builtins = [&](const SPIRVariable &var, bool regular, bool primitive) {
+			if (has_decoration(var.self, DecorationBuiltIn))
+				emit_output_builtin(static_cast<BuiltIn>(get_decoration(var.self, DecorationBuiltIn)), regular, primitive);
+		};
+
+		statement(is_mesh_shader ? "struct gl_MeshPerVertexEXT" : "struct SPIRV_Cross_Output");
+		begin_scope();
+		if (ir.source.hlsl)
+		{
+			for (auto var_id : execution.interface_variables)
+			{
+				auto *var = maybe_get<SPIRVariable>(var_id);
+				if (!var || var->storage != StorageClassOutput)
+					continue;
+
+				if (emit_output_variables_for_id(var_id, false))
+					continue;
+
+				if (is_builtin_variable(*var))
+					emit_output_builtins(*var, true, !is_mesh_shader);
+			}
 		}
-		emit_builtin_outputs_in_struct();
-		if (!is_mesh_shader)
-			emit_builtin_primitive_outputs_in_struct();
+		else
+		{
+			sort(output_variables.begin(), output_variables.end(), variable_compare);
+			for (auto &var : output_variables)
+				emit_output_variable(var, false);
+			active_output_builtins.for_each_bit([&](uint32_t i) {
+				emit_builtin_output_in_struct(static_cast<BuiltIn>(i));
+			});
+			if (!is_mesh_shader)
+			{
+				active_output_builtins.for_each_bit([&](uint32_t i) {
+					emit_builtin_primitive_output_in_struct(static_cast<BuiltIn>(i));
+				});
+			}
+		}
 		end_scope_decl();
 		statement("");
 
@@ -1861,16 +1974,29 @@ void CompilerHLSL::emit_resources()
 		{
 			statement("struct gl_MeshPerPrimitiveEXT");
 			begin_scope();
-			for (auto &var : output_variables)
+			if (ir.source.hlsl)
 			{
-				if (!is_per_primitive_variable(*var.var))
-					continue;
-				if (var.block && var.block_member_index != 0)
-					continue;
+				for (auto var_id : execution.interface_variables)
+				{
+					auto *var = maybe_get<SPIRVariable>(var_id);
+					if (!var || var->storage != StorageClassOutput)
+						continue;
 
-				emit_interface_block_in_struct(*var.var, active_outputs);
+					if (emit_output_variables_for_id(var_id, true))
+						continue;
+
+					if (is_builtin_variable(*var))
+						emit_output_builtins(*var, false, true);
+				}
 			}
-			emit_builtin_primitive_outputs_in_struct();
+			else
+			{
+				for (auto &var : output_variables)
+					emit_output_variable(var, true);
+				active_output_builtins.for_each_bit([&](uint32_t i) {
+					emit_builtin_primitive_output_in_struct(static_cast<BuiltIn>(i));
+				});
+			}
 			end_scope_decl();
 			statement("");
 		}

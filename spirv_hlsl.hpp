@@ -241,9 +241,9 @@ private:
 	void emit_interface_block_in_struct(const SPIRVariable &var, std::unordered_set<uint32_t> &active_locations);
 	void emit_interface_block_member_in_struct(const SPIRVariable &var, uint32_t member_index, uint32_t location,
 	                                           std::unordered_set<uint32_t> &active_locations);
-	void emit_builtin_inputs_in_struct();
-	void emit_builtin_outputs_in_struct();
-	void emit_builtin_primitive_outputs_in_struct();
+	void emit_builtin_input_in_struct(BuiltIn builtin);
+	bool emit_builtin_output_in_struct(BuiltIn builtin);
+	bool emit_builtin_primitive_output_in_struct(BuiltIn builtin);
 	void emit_texture_op(const Instruction &i, bool sparse) override;
 	void emit_instruction(const Instruction &instruction) override;
 	void emit_glsl_op(uint32_t result_type, uint32_t result_id, uint32_t op, const uint32_t *args,
