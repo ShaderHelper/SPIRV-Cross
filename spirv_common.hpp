@@ -702,6 +702,7 @@ struct SPIRExtension : IVariant
 
 	enum ShaderDebugInfoOps
 	{
+		DebugCompilationUnit = 1,
 		DebugLine = 103,
 		DebugSource = 35
 	};

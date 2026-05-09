@@ -328,7 +328,25 @@ void Parser::parse(const Instruction &instruction)
 				// Parse global ShaderDebugInfo we care about.
 				// Just forward the string information.
 				if (ops[3] == SPIRExtension::DebugSource)
+				{
 					set<SPIRString>(ops[1], get<SPIRString>(ops[4]).str);
+				}
+				else if (ops[3] == SPIRExtension::DebugCompilationUnit)
+				{
+					auto *source_language = maybe_get<SPIRConstant>(ops[7]);
+					if (source_language)
+					{
+						ir.source.lang = static_cast<SourceLanguage>(source_language->scalar());
+						switch (ir.source.lang)
+						{
+						case SourceLanguageHLSL:
+							ir.source.hlsl = true;
+							break;
+						default:
+							break;
+						}
+					}
+				}
 			}
 		}
 		break;
