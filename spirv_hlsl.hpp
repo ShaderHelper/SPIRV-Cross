@@ -147,10 +147,16 @@ public:
 		// Rather than emitting main() for the entry point, use the name in SPIR-V.
 		bool use_entry_point_name = false;
 
+		// Emit stage input/output declarations in OpEntryPoint interface variable order.
+		bool use_entry_point_interface_order = false;
+
 		// Preserve (RW)StructuredBuffer types if the input source was HLSL.
 		// This relies on UserTypeGOOGLE to encode the buffer type either as "structuredbuffer" or "rwstructuredbuffer"
 		// whereas the type can be extended with an optional subtype, e.g. "structuredbuffer:int".
 		bool preserve_structured_buffers = false;
+
+		// Use UserSemantic decoration info (if specified), otherwise use default mechanism (such as add_vertex_attribute_remap or TEXCOORD#).
+		bool user_semantic = false;
 	};
 
 	explicit CompilerHLSL(std::vector<uint32_t> spirv_)
@@ -298,6 +304,7 @@ private:
 	SPIRType::BaseType get_builtin_basetype(BuiltIn builtin, SPIRType::BaseType default_type) override;
 
 	bool is_hlsl_force_storage_buffer_as_uav(ID id) const;
+	bool is_hidden_io_variable(const SPIRVariable &var) const;
 
 	Options hlsl_options;
 

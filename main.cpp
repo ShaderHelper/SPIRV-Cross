@@ -694,6 +694,8 @@ struct CLIArguments
 	uint32_t glsl_ovr_multiview_view_count = 0;
 	SmallVector<pair<uint32_t, uint32_t>> glsl_ext_framebuffer_fetch;
 	bool glsl_ext_framebuffer_fetch_noncoherent = false;
+	uint32_t glsl_descriptor_heap_set = UINT32_MAX;
+	uint32_t glsl_descriptor_heap_binding = UINT32_MAX;
 	bool vulkan_glsl_disable_ext_samplerless_texture_functions = false;
 	bool emit_line_directives = false;
 	bool enable_storage_image_qualifier_deduction = true;
@@ -744,6 +746,7 @@ struct CLIArguments
 	bool hlsl_enable_16bit_types = false;
 	bool hlsl_flatten_matrix_vertex_input_semantics = false;
 	bool hlsl_preserve_structured_buffers = false;
+	bool hlsl_user_semantic = false;
 	HLSLBindingFlags hlsl_binding_flags = 0;
 	bool vulkan_semantics = false;
 	bool flatten_multidimensional_arrays = false;
@@ -820,6 +823,7 @@ static void print_help_glsl()
 	                "\t\tPrimary use case is supporting external samplers in ESSL for video rendering on Android where you could remap a texture to a YUV one.\n"
 	                "\t[--glsl-force-flattened-io-blocks]:\n\t\tAlways flatten I/O blocks and structs.\n"
 	                "\t[--glsl-ovr-multiview-view-count count]:\n\t\tIn GL_OVR_multiview2, specify layout(num_views).\n"
+	                "\t[--glsl-descriptor-heap-set-binding desc_set binding]:\n\t\tInstead of layout(descriptor_heap), emit layout(set = desc_set, binding = binding) instead for compatibility with mapping API.\n"
 	);
 	// clang-format on
 }
@@ -852,6 +856,7 @@ static void print_help_hlsl()
 	                "\t[--hlsl-enable-16bit-types]:\n\t\tEnables native use of half/int16_t/uint16_t and ByteAddressBuffer interaction with these types. Requires SM 6.2.\n"
 	                "\t[--hlsl-flatten-matrix-vertex-input-semantics]:\n\t\tEmits matrix vertex inputs with input semantics as if they were independent vectors, e.g. TEXCOORD{2,3,4} rather than matrix form TEXCOORD2_{0,1,2}.\n"
 	                "\t[--hlsl-preserve-structured-buffers]:\n\t\tEmit SturucturedBuffer<T> rather than ByteAddressBuffer. Requires UserTypeGOOGLE to be emitted. Intended for DXC roundtrips.\n"
+	                "\t[--hlsl-user-semantic]:\n\t\tUses UserSemantic decoration to generate vertex input and output semantics.\n"
 	);
 	// clang-format on
 }
@@ -1042,17 +1047,17 @@ static void print_help_obscure()
 	// clang-format on
 }
 
-static void print_help()
+static void print_help_all()
 {
 	print_version();
 
 	// clang-format off
-	fprintf(stderr, "Usage: spirv-cross <...>\n"
+	fprintf(stderr, "Usage: spirv-cross [SPIR-V file] [options]\n"
 	                "\nBasic:\n"
 	                "\t[SPIR-V file] (- is stdin)\n"
 	                "\t[--output <output path>]: If not provided, prints output to stdout.\n"
 	                "\t[--dump-resources]:\n\t\tPrints a basic reflection of the SPIR-V module along with other output.\n"
-	                "\t[--help]:\n\t\tPrints this help message.\n"
+	                "\t[--help]:\n\t\tPrints a summary help message.\n"
 	);
 	// clang-format on
 
@@ -1062,6 +1067,33 @@ static void print_help()
 	print_help_msl();
 	print_help_hlsl();
 	print_help_obscure();
+}
+
+static void print_help()
+{
+	print_version();
+
+	// clang-format off
+	fprintf(stderr, "Usage: spirv-cross [SPIR-V file] [options]\n"
+	                "\nBasic:\n"
+	                "\t[SPIR-V file] (- is stdin)\n"
+	                "\t[--output <output path>]: If not provided, prints output to stdout.\n"
+	                "\t[--help]:\n\t\tPrints this summary help message.\n"
+	                "\t[--help-all]:\n\t\tPrints all available help options.\n"
+	);
+	// clang-format on
+
+	print_help_backend();
+	print_help_common();
+
+	// clang-format off
+	fprintf(stderr, "\nHelp Categories:\n"
+	                "\t[--help-glsl]\n"
+	                "\t[--help-msl]\n"
+	                "\t[--help-hlsl]\n"
+	                "\t[--help-obscure]\n"
+	);
+	// clang-format on
 }
 
 static bool remap_generic(Compiler &compiler, const SmallVector<Resource> &resources, const Remap &remap)
@@ -1429,6 +1461,10 @@ static string compile_iteration(const CLIArguments &args, std::vector<uint32_t> 
 	opts.force_recompile_max_debug_iterations = args.force_recompile_max_debug_iterations;
 	compiler->set_common_options(opts);
 
+	// This is enough for Vulkan mapping API.
+	if (args.glsl_descriptor_heap_set != UINT32_MAX)
+		compiler->remap_descriptor_heap(ResourceTypeUnknown, args.glsl_descriptor_heap_set, args.glsl_descriptor_heap_binding);
+
 	for (auto &fetch : args.glsl_ext_framebuffer_fetch)
 		compiler->remap_ext_framebuffer_fetch(fetch.first, fetch.second, !args.glsl_ext_framebuffer_fetch_noncoherent);
 
@@ -1471,6 +1507,7 @@ static string compile_iteration(const CLIArguments &args, std::vector<uint32_t> 
 		hlsl_opts.enable_16bit_types = args.hlsl_enable_16bit_types;
 		hlsl_opts.flatten_matrix_vertex_input_semantics = args.hlsl_flatten_matrix_vertex_input_semantics;
 		hlsl_opts.preserve_structured_buffers = args.hlsl_preserve_structured_buffers;
+		hlsl_opts.user_semantic = args.hlsl_user_semantic;
 		hlsl->set_hlsl_options(hlsl_opts);
 		hlsl->set_resource_binding_flags(args.hlsl_binding_flags);
 		if (args.hlsl_base_vertex_index_explicit_binding)
@@ -1607,6 +1644,34 @@ static int main_inner(int argc, char *argv[])
 		print_help();
 		parser.end();
 	});
+	cbs.add("--help-all", [](CLIParser &parser) {
+		print_help_all();
+		parser.end();
+	});
+	cbs.add("--help-backend", [](CLIParser &parser) {
+		print_help_backend();
+		parser.end();
+	});
+	cbs.add("--help-common", [](CLIParser &parser) {
+		print_help_common();
+		parser.end();
+	});
+	cbs.add("--help-glsl", [](CLIParser &parser) {
+		print_help_glsl();
+		parser.end();
+	});
+	cbs.add("--help-msl", [](CLIParser &parser) {
+		print_help_msl();
+		parser.end();
+	});
+	cbs.add("--help-hlsl", [](CLIParser &parser) {
+		print_help_hlsl();
+		parser.end();
+	});
+	cbs.add("--help-obscure", [](CLIParser &parser) {
+		print_help_obscure();
+		parser.end();
+	});
 	cbs.add("--revision", [](CLIParser &parser) {
 		print_version();
 		parser.end();
@@ -1646,6 +1711,11 @@ static int main_inner(int argc, char *argv[])
 	cbs.add("--glsl-ext-framebuffer-fetch-noncoherent", [&args](CLIParser &) {
 		args.glsl_ext_framebuffer_fetch_noncoherent = true;
 	});
+	cbs.add("--glsl-descriptor-heap-set-binding", [&args](CLIParser &parser)
+	{
+		args.glsl_descriptor_heap_set = parser.next_uint();
+		args.glsl_descriptor_heap_binding = parser.next_uint();
+	});
 	cbs.add("--vulkan-glsl-disable-ext-samplerless-texture-functions",
 	        [&args](CLIParser &) { args.vulkan_glsl_disable_ext_samplerless_texture_functions = true; });
 	cbs.add("--disable-storage-image-qualifier-deduction",
@@ -1673,6 +1743,7 @@ static int main_inner(int argc, char *argv[])
 	cbs.add("--hlsl-flatten-matrix-vertex-input-semantics",
 	        [&args](CLIParser &) { args.hlsl_flatten_matrix_vertex_input_semantics = true; });
 	cbs.add("--hlsl-preserve-structured-buffers", [&args](CLIParser &) { args.hlsl_preserve_structured_buffers = true; });
+	cbs.add("--hlsl-user-semantic", [&args](CLIParser &) { args.hlsl_user_semantic = true; });
 	cbs.add("--vulkan-semantics", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("-V", [&args](CLIParser &) { args.vulkan_semantics = true; });
 	cbs.add("--flatten-multidimensional-arrays", [&args](CLIParser &) { args.flatten_multidimensional_arrays = true; });

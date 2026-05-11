@@ -91,6 +91,28 @@ struct BuiltInResource
 	Resource resource;
 };
 
+// Needs to stay in sync 1:1 with C API.
+enum ResourceType
+{
+	ResourceTypeUnknown = 0,
+	ResourceTypeUniformBuffer = 1,
+	ResourceTypeStorageBuffer = 2,
+	ResourceTypeStageInput = 3,
+	ResourceTypeStageOutput = 4,
+	ResourceTypeSubpassInput = 5,
+	ResourceTypeStorageImage = 6,
+	ResourceTypeSampledImage = 7,
+	ResourceTypeAtomicCounter = 8,
+	ResourceTypePushConstant = 9,
+	ResourceTypeSeparateImage = 10,
+	ResourceTypeSeparateSamplers = 11,
+	ResourceTypeAccelerationStructure = 12,
+	ResourceTypeRayQuery = 13,
+	ResourceTypeShaderRecordBuffer = 14,
+	ResourceTypeGLPlainUniform = 15,
+	ResourceTypeTensor = 16
+};
+
 struct ShaderResources
 {
 	SmallVector<Resource> uniform_buffers;
@@ -549,6 +571,9 @@ public:
 		return position_invariant;
 	}
 
+	const ParsedIR &get_ir() const { return ir; }
+	uint32_t evaluate_constant_u32(uint32_t id) const;
+
 protected:
 	const uint32_t *stream(const Instruction &instr) const
 	{
@@ -582,6 +607,7 @@ protected:
 	// (SSBO, image load store, etc)
 	SmallVector<uint32_t> global_variables;
 	SmallVector<uint32_t> aliased_variables;
+	SmallVector<uint32_t> buffer_pointer_variables;
 
 	SPIRFunction *current_function = nullptr;
 	SPIRBlock *current_block = nullptr;
@@ -694,6 +720,7 @@ protected:
 	bool is_array(const SPIRType &type) const;
 	bool is_pointer(const SPIRType &type) const;
 	bool is_physical_pointer(const SPIRType &type) const;
+	bool is_physical_or_buffer_pointer(const SPIRType &type) const;
 	bool is_physical_pointer_to_buffer_block(const SPIRType &type) const;
 	static bool is_runtime_size_array(const SPIRType &type);
 	uint32_t expression_type_id(uint32_t id) const;
@@ -701,6 +728,7 @@ protected:
 	bool expression_is_lvalue(uint32_t id) const;
 	bool variable_storage_is_aliased(const SPIRVariable &var);
 	SPIRVariable *maybe_get_backing_variable(uint32_t chain);
+	SPIRExpression *maybe_get_backing_buffer_pointer(uint32_t chain);
 
 	void register_read(uint32_t expr, uint32_t chain, bool forwarded);
 	void register_write(uint32_t chain);
@@ -735,6 +763,7 @@ protected:
 
 	// Dependency tracking for temporaries read from variables.
 	void flush_dependees(SPIRVariable &var);
+	void flush_dependees(SPIRExpression &expr);
 	void flush_all_active_variables();
 	void flush_control_dependent_expressions(uint32_t block);
 	void flush_all_atomic_capable_variables();
@@ -1086,6 +1115,23 @@ protected:
 	SmallVector<uint32_t> physical_storage_non_block_pointer_types;
 	std::unordered_map<uint32_t, PhysicalBlockMeta> physical_storage_type_to_alignment;
 
+	struct DescriptorHeapMeta
+	{
+		TypeID type;
+		bool hlsl_style_stride;
+
+		// For buffers
+		ID buffer_pointer_id;
+		StorageClass storage;
+		bool nonwritable;
+		bool nonreadable;
+		bool coherent;
+		bool is_volatile;
+		bool is_restrict;
+	};
+	std::vector<DescriptorHeapMeta> descriptor_heap_types;
+	void analyze_descriptor_heap_types();
+
 	void analyze_variable_scope(SPIRFunction &function, AnalyzeVariableScopeAccessHandler &handler);
 	void find_function_local_luts(SPIRFunction &function, const AnalyzeVariableScopeAccessHandler &handler,
 	                              bool single_function);
@@ -1196,7 +1242,6 @@ protected:
 	bool flush_phi_required(BlockID from, BlockID to) const;
 
 	uint32_t evaluate_spec_constant_u32(const SPIRConstantOp &spec) const;
-	uint32_t evaluate_constant_u32(uint32_t id) const;
 
 	bool is_vertex_like_shader() const;
 
